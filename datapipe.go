@@ -23,9 +23,16 @@ type Config struct {
 	srcDbUri     string //Source database driver URI
 	srcSelectSql string //Source database select SQL statement
 
-	dstDbDriver  string //Destination database driver name
-	dstDbUri     string //Destination database driver URI
-	dstTableName string //Destination database table name
+	dstDbDriver string //Destination database driver name
+	dstDbUri    string //Destination database driver URI
+	dstSchema   string
+	dstTable    string //Destination database table name
+}
+
+type Insert interface {
+	Append(rows *sql.Rows) (err error)
+	Flush() (totalRowCount int, err error)
+	Close() (err error)
 }
 
 func (c *Config) Init() (err error) {
@@ -48,7 +55,10 @@ func (c *Config) Init() (err error) {
 	if c.dstDbUri, err = c.EnvStr("DST_DB_URI"); err != nil {
 		return err
 	}
-	if c.dstTableName, err = c.EnvStr("DST_DB_TABLE_NAME"); err != nil {
+	if c.dstSchema, err = c.EnvStr("DST_DB_SCHEMA"); err != nil {
+		return err
+	}
+	if c.dstTable, err = c.EnvStr("DST_DB_TABLE"); err != nil {
 		return err
 	}
 
@@ -116,14 +126,16 @@ func run(cfg *Config) (err error) {
 }
 
 func clearTable(dstDb *sql.DB, cfg *Config) (err error) {
-	if _, err = dstDb.Exec("TRUNCATE TABLE " + cfg.dstTableName); err != nil {
+	if _, err = dstDb.Exec("TRUNCATE TABLE " + cfg.dstSchema + "." + cfg.dstTable); err != nil {
 		return err
 	}
 	return nil
 }
 
 func copyTable(srcDb *sql.DB, dstDb *sql.DB, cfg *Config) (err error) {
+	var ir Insert
 	var rows *sql.Rows
+	var rowCount int
 	var columns []string
 
 	if rows, err = srcDb.Query(cfg.srcSelectSql); err != nil {
@@ -136,57 +148,53 @@ func copyTable(srcDb *sql.DB, dstDb *sql.DB, cfg *Config) (err error) {
 
 	startTime := time.Now()
 
-	i, err := copyRows(dstDb, rows, columns, cfg)
+	switch cfg.dstDbDriver {
+	case "postgres":
+		log.Printf("Using COPY IN\n")
+		if ir, err = bulk.NewCopyIn(dstDb, columns, cfg.dstSchema, cfg.dstTable); err != nil {
+			return err
+		}
+	default:
+		if ir, err = bulk.NewBulk(dstDb, columns, cfg.dstSchema, cfg.dstTable, cfg.maxRowBufSz, cfg.maxRowTxCommit); err != nil {
+			return err
+		}
+	}
+
+	rowCount, err = copyBulkRows(dstDb, rows, ir, cfg)
+
+	if err = ir.Close(); err != nil {
+		return err
+	}
 
 	duration := time.Since(startTime)
 
-	log.Printf("%d rows in %s\n", i, duration.String())
+	log.Printf("%d rows in %s\n", rowCount, duration.String())
 
 	return err
 }
 
-func copyRows(dstDb *sql.DB, rows *sql.Rows, columns []string, cfg *Config) (rowCount int, err error) {
-	var ir *bulk.Bulk
-	var tx *sql.Tx
-
-	if ir, err = bulk.NewBulk(dstDb, columns, cfg.dstTableName, cfg.maxRowBufSz); err != nil {
-		return 0, err
-	}
-
-	defer ir.Close()
-
-	if tx, err = dstDb.Begin(); err != nil {
-		return 0, err
-	}
+func copyBulkRows(dstDb *sql.DB, rows *sql.Rows, ir Insert, cfg *Config) (rowCount int, err error) {
+	var totalRowCount int
 
 	i := 1
 
 	for rows.Next() {
-		rows.Scan(ir.ValuePtrs...) //Scan row values into buffer
+		if err = ir.Append(rows); err != nil {
+			return 0, err
+		}
 
-		ir.Append()
-
-		if i%cfg.maxRowTxCommit == 0 {
-			if err = tx.Commit(); err != nil {
-				return 0, err
-			}
-			if tx, err = dstDb.Begin(); err != nil {
-				return 0, err
-			}
-
+		if i%1000 == 0 {
 			fmt.Print(".")
 		}
 
 		i++
 	}
 
-	ir.Flush()
-
-	if err = tx.Commit(); err != nil {
+	if totalRowCount, err = ir.Flush(); err != nil {
 		return 0, err
 	}
 
 	fmt.Println()
 
-	return ir.TotalRowCount, nil
+	return totalRowCount, nil
 }

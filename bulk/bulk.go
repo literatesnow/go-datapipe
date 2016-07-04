@@ -4,29 +4,34 @@ import (
 	"bytes"
 	"database/sql"
 	"strconv"
-	"strings"
 )
 
 type Bulk struct {
-	db        *sql.DB //Database handle
-	tableName string
-	columns   []string
+	db *sql.DB //Database handle
+	tx *sql.Tx
+
+	schema         string
+	tableName      string
+	columns        []string
+	maxRowTxCommit int
 
 	stmt   *sql.Stmt     //Prepared statement for bulk insert
 	buf    []interface{} //Buffer to hold values to insert
 	bufSz  int           //Size of the buffer
 	bufPos int
 
-	ValuePtrs []interface{} //Pointer to current row buffer
+	valuePtrs []interface{} //Pointer to current row buffer
 	values    []interface{} //Buffer for the current row
 	colCount  int           //Number of columns
 
 	rowPos        int //Position of current row
-	TotalRowCount int //Total number of rows
+	totalRowCount int //Total number of rows
 }
 
 //Appends row values to internal buffer
-func (r *Bulk) Append() (err error) {
+func (r *Bulk) Append(rows *sql.Rows) (err error) {
+	rows.Scan(r.valuePtrs)
+
 	//Copy row values into buffer
 	for i := 0; i < r.colCount; i++ {
 		r.buf[r.bufPos] = r.values[i]
@@ -34,14 +39,26 @@ func (r *Bulk) Append() (err error) {
 	}
 
 	r.rowPos++
+	r.totalRowCount++
+
+	if r.totalRowCount > 0 && r.totalRowCount%r.maxRowTxCommit == 0 {
+		if err = r.tx.Commit(); err != nil {
+			return err
+		}
+		r.tx = nil
+	}
 
 	//Insert rows if buffer is full
 	if r.bufPos >= r.bufSz {
+		if r.tx == nil {
+			if r.tx, err = r.db.Begin(); err != nil {
+				return err
+			}
+		}
+
 		if _, err = r.stmt.Exec(r.buf...); err != nil {
 			return err
 		}
-
-		r.TotalRowCount += r.rowPos
 
 		r.bufPos = 0
 		r.rowPos = 0
@@ -51,14 +68,16 @@ func (r *Bulk) Append() (err error) {
 }
 
 //Closes any prepared statements
-func (r *Bulk) Close() {
+func (r *Bulk) Close() (err error) {
 	if r.stmt != nil {
 		r.stmt.Close()
 	}
+
+	return nil
 }
 
 //Writes any unsaved values from buffer to database
-func (r *Bulk) Flush() (err error) {
+func (r *Bulk) Flush() (totalRowCount int, err error) {
 	if r.bufPos > 0 {
 		buf := make([]interface{}, r.bufPos)
 		for i := 0; i < r.bufPos; i++ {
@@ -67,22 +86,26 @@ func (r *Bulk) Flush() (err error) {
 
 		stmt, err := r.prepare(r.rowPos)
 		if err != nil {
-			return err
+			return 0, err
 		}
 
 		defer stmt.Close()
 
 		if _, err = stmt.Exec(buf...); err != nil {
-			return err
+			return 0, err
 		}
 
-		r.TotalRowCount += r.rowPos
+		r.totalRowCount += r.rowPos
 
 		r.bufPos = 0
 		r.rowPos = 0
 	}
 
-	return nil
+	if err = r.tx.Commit(); err != nil {
+		return 0, err
+	}
+
+	return r.totalRowCount, nil
 }
 
 //Creates a bulk insert SQL prepared statement based on a number of rows
@@ -91,9 +114,16 @@ func (r *Bulk) prepare(rowCount int) (stmt *sql.Stmt, err error) {
 	var buf bytes.Buffer
 
 	buf.WriteString("INSERT INTO ")
+	buf.WriteString(r.schema)
+	buf.WriteString(".")
 	buf.WriteString(r.tableName)
 	buf.WriteString(" (")
-	buf.WriteString(strings.Join(r.columns, ","))
+	for i := 0; i < r.colCount; i++ {
+		if i > 0 {
+			buf.WriteString(",")
+		}
+		buf.WriteString(r.columns[i])
+	}
 	buf.WriteString(") VALUES ")
 
 	pos := 1
@@ -117,19 +147,21 @@ func (r *Bulk) prepare(rowCount int) (stmt *sql.Stmt, err error) {
 	return r.db.Prepare(buf.String())
 }
 
-func NewBulk(db *sql.DB, columns []string, tableName string, rowCount int) (r *Bulk, err error) {
+func NewBulk(db *sql.DB, columns []string, schema string, tableName string, rowCount int, maxRowTxCommit int) (r *Bulk, err error) {
 	r = &Bulk{
-		db:        db,
-		tableName: tableName,
-		columns:   columns}
+		db:             db,
+		schema:         schema,
+		tableName:      tableName,
+		columns:        columns,
+		maxRowTxCommit: maxRowTxCommit}
 
 	r.colCount = len(columns)
 
 	r.values = make([]interface{}, r.colCount)
-	r.ValuePtrs = make([]interface{}, r.colCount)
+	r.valuePtrs = make([]interface{}, r.colCount)
 
 	for i := 0; i < r.colCount; i++ {
-		r.ValuePtrs[i] = &r.values[i]
+		r.valuePtrs[i] = &r.values[i]
 	}
 
 	r.bufSz = r.colCount * rowCount
