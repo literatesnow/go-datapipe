@@ -18,7 +18,8 @@ Configuration is done by environment variables
 |SRC_DB_SELECT_SQL |Select statement to query rows from source database                          |       |
 |DST_DB_DRIVER     |Destination database driver name                                             |       |
 |DST_DB_URI        |Destination database driver URI                                              |       |
-|DST_DB_TABLE_NAME |Destination database table name                                              |       |
+|DST_DB_SCHEMA     |Destination database schema name                                             |       |
+|DST_DB_TABLE      |Destination database table name                                              |       |
 |MAX_ROW_BUF_SZ    |Maximum number of rows to buffer at a time                                   |100    |
 |MAX_ROW_TX_COMMIT |Maximum number of rows to process before committing the database transaction |500    |
 
@@ -37,7 +38,8 @@ export SRC_DB_SELECT_SQL="SELECT * FROM dbo.source_table_name WHERE thing >= 100
 
 export DST_DB_DRIVER="postgres"
 export DST_DB_URI="user=test password=test dbname=test_db host=localhost"
-export DST_DB_TABLE="test.destination_table_name"
+export DST_DB_SCHEMA="master"
+export DST_DB_TABLE="destination_table_name"
 
 export MAX_ROW_BUF_SZ=100
 export MAX_ROW_TX_COMMIT=500
