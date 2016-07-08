@@ -155,6 +155,7 @@ func copyTable(srcDb *sql.DB, dstDb *sql.DB, cfg *Config) (err error) {
 			return err
 		}
 	default:
+		log.Printf("Using bulk insert\n")
 		if ir, err = bulk.NewBulk(dstDb, columns, cfg.dstSchema, cfg.dstTable, cfg.maxRowBufSz, cfg.maxRowTxCommit); err != nil {
 			return err
 		}
