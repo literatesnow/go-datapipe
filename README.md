@@ -2,13 +2,16 @@
 
 Data pipe copies data from one database table to a table in another database using bulk insert statements or faster methods if available (for example, COPY IN for the Postgres driver).
 
-*The destination table is truncated!*
+**The destination table is truncated!**
 
 ## Database Support
 
-* Postgres DB_DRIVER=postgres, [URI example](https://godoc.org/github.com/lib/pq)
-* MS SQL server DB_DRIVER=mssql, [URI example](https://github.com/denisenkom/go-mssqldb)
-* Any database which Go supports (source modification required)
+|Database        |Driver Name   |URI                                                  |
+|----------------|--------------|-----------------------------------------------------|
+|Postgres        |postgres      |[Example](https://godoc.org/github.com/lib/pq)       |
+|MS SQL server   |mssql         |[Example](https://github.com/denisenkom/go-mssqldb)  |
+
+* Also supports any database which has Go drivers (source modification required)
 
 ## Configuration
 
@@ -35,7 +38,8 @@ Configuration is done by environment variables
 ## Example
 
 ```bash
-# All rows from SQL server dbo.source_table_name to Postgres master.destination_table_name
+# Copy all rows where thing >= 100 from SQL server dbo.source_table_name to Postgres master.destination_table_name
+
 export SRC_DB_DRIVER="mssql"
 export SRC_DB_URI="server=localhost;port=1433;database=Test;user id=domain\user_name;password=test"
 export SRC_DB_SELECT_SQL="SELECT * FROM dbo.source_table_name WHERE thing >= 100"
