@@ -13,6 +13,15 @@ Data pipe copies data from one database table to a table in another database usi
 
 * Also supports any database which has Go drivers (source modification required)
 
+## Compiling
+
+* Clone go-datapipe into ``$GOPATH/src/github.com/literatesnow/go-datapipe``
+* ``go get``
+* ``go install``
+* Binary is compiled to ``$GOPATH/bin/go-datapipe``
+
+A [Vagrant](https://www.vagrantup.com/) environment which includes golang can also be used for compiling.
+
 ## Configuration
 
 Configuration is done by environment variables
