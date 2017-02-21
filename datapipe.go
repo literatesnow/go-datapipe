@@ -12,7 +12,7 @@ import (
 	_ "github.com/denisenkom/go-mssqldb"
 	_ "github.com/lib/pq"
 
-	"github.com/lic-nz/go-datapipe/bulk"
+	"github.com/literatesnow/go-datapipe/bulk"
 )
 
 type Config struct {
