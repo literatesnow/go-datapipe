@@ -13,28 +13,27 @@ type Bulk struct {
 	schema         string
 	tableName      string
 	columns        []string
-	maxRowTxCommit int64
+	maxRowTxCommit int
 
 	stmt   *sql.Stmt     //Prepared statement for bulk insert
 	buf    []interface{} //Buffer to hold values to insert
-	bufSz  int64         //Size of the buffer
-	bufPos int64
+	bufSz  int           //Size of the buffer
+	bufPos int
 
 	valuePtrs []interface{} //Pointer to current row buffer
 	values    []interface{} //Buffer for the current row
-	colCount  int64         //Number of columns
+	colCount  int           //Number of columns
 
-	rowPos        int64 //Position of current row
-	totalRowCount int64 //Total number of rows
+	rowPos        int //Position of current row
+	totalRowCount int //Total number of rows
 }
 
 //Appends row values to internal buffer
 func (r *Bulk) Append(rows *sql.Rows) (err error) {
-	var i int64
 	rows.Scan(r.valuePtrs)
 
 	//Copy row values into buffer
-	for i = 0; i < r.colCount; i++ {
+	for i := 0; i < r.colCount; i++ {
 		r.buf[r.bufPos] = r.values[i]
 		r.bufPos++
 	}
@@ -78,11 +77,10 @@ func (r *Bulk) Close() (err error) {
 }
 
 //Writes any unsaved values from buffer to database
-func (r *Bulk) Flush() (totalRowCount int64, err error) {
+func (r *Bulk) Flush() (totalRowCount int, err error) {
 	if r.bufPos > 0 {
-		var i int64
 		buf := make([]interface{}, r.bufPos)
-		for i = 0; i < r.bufPos; i++ {
+		for i := 0; i < r.bufPos; i++ {
 			buf[i] = r.buf[i]
 		}
 
@@ -112,16 +110,15 @@ func (r *Bulk) Flush() (totalRowCount int64, err error) {
 
 //Creates a bulk insert SQL prepared statement based on a number of rows
 //Uses $x for row position
-func (r *Bulk) prepare(rowCount int64) (stmt *sql.Stmt, err error) {
+func (r *Bulk) prepare(rowCount int) (stmt *sql.Stmt, err error) {
 	var buf bytes.Buffer
-	var i, j int64
 
 	buf.WriteString("INSERT INTO ")
 	buf.WriteString(r.schema)
 	buf.WriteString(".")
 	buf.WriteString(r.tableName)
 	buf.WriteString(" (")
-	for i = 0; i < r.colCount; i++ {
+	for i := 0; i < r.colCount; i++ {
 		if i > 0 {
 			buf.WriteString(",")
 		}
@@ -131,12 +128,12 @@ func (r *Bulk) prepare(rowCount int64) (stmt *sql.Stmt, err error) {
 
 	pos := 1
 
-	for i = 0; i < rowCount; i++ {
+	for i := 0; i < rowCount; i++ {
 		if i > 0 {
 			buf.WriteString(",")
 		}
 		buf.WriteString("(")
-		for j = 0; j < r.colCount; j++ {
+		for j := 0; j < r.colCount; j++ {
 			if j > 0 {
 				buf.WriteString(",")
 			}
@@ -150,7 +147,7 @@ func (r *Bulk) prepare(rowCount int64) (stmt *sql.Stmt, err error) {
 	return r.db.Prepare(buf.String())
 }
 
-func NewBulk(db *sql.DB, columns []string, schema string, tableName string, rowCount int64, maxRowTxCommit int64) (r *Bulk, err error) {
+func NewBulk(db *sql.DB, columns []string, schema string, tableName string, rowCount int, maxRowTxCommit int) (r *Bulk, err error) {
 	r = &Bulk{
 		db:             db,
 		schema:         schema,
@@ -158,14 +155,12 @@ func NewBulk(db *sql.DB, columns []string, schema string, tableName string, rowC
 		columns:        columns,
 		maxRowTxCommit: maxRowTxCommit}
 
-	r.colCount = int64(len(columns))
+	r.colCount = len(columns)
 
 	r.values = make([]interface{}, r.colCount)
 	r.valuePtrs = make([]interface{}, r.colCount)
 
-	var i int64
-
-	for i = 0; i < r.colCount; i++ {
+	for i := 0; i < r.colCount; i++ {
 		r.valuePtrs[i] = &r.values[i]
 	}
 
