@@ -18,7 +18,7 @@ type CopyIn struct {
 	valuePtrs []interface{} //Pointer to current row buffer
 	values    []interface{} //Buffer for the current row
 
-	totalRowCount int //Total number of rows
+	totalRowCount int64 //Total number of rows
 }
 
 //Appends row values to internal buffer
@@ -62,7 +62,7 @@ func (r *CopyIn) Close() (err error) {
 	return nil
 }
 
-func (r *CopyIn) Flush() (totalRowCount int, err error) {
+func (r *CopyIn) Flush() (totalRowCount int64, err error) {
 	if _, err = r.stmt.Exec(); err != nil {
 		return 0, err
 	}

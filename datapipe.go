@@ -16,8 +16,8 @@ import (
 )
 
 type Config struct {
-	maxRowBufSz    int //Maximum number of rows to buffer at a time
-	maxRowTxCommit int //Maximum number of rows to process before committing the database transaction
+	maxRowBufSz    int64 //Maximum number of rows to buffer at a time
+	maxRowTxCommit int64 //Maximum number of rows to process before committing the database transaction
 
 	srcDbDriver  string //Source database driver name
 	srcDbUri     string //Source database driver URI
@@ -27,17 +27,19 @@ type Config struct {
 	dstDbUri    string //Destination database driver URI
 	dstSchema   string
 	dstTable    string //Destination database table name
+
+	dstCheckRows int64 //Minimum number of rows to expect in the destination table
 }
 
 type Insert interface {
 	Append(rows *sql.Rows) (err error)
-	Flush() (totalRowCount int, err error)
+	Flush() (totalRowCount int64, err error)
 	Close() (err error)
 }
 
 func (c *Config) Init() (err error) {
-	c.maxRowBufSz, _ = c.EnvInt("MAX_ROW_BUF_SZ", 100)
-	c.maxRowTxCommit, _ = c.EnvInt("MAX_ROW_TX_COMMIT", 500)
+	c.maxRowBufSz, _ = c.EnvInt64("MAX_ROW_BUF_SZ", 100)
+	c.maxRowTxCommit, _ = c.EnvInt64("MAX_ROW_TX_COMMIT", 500)
 
 	if c.srcDbDriver, err = c.EnvStr("SRC_DB_DRIVER"); err != nil {
 		return err
@@ -62,6 +64,8 @@ func (c *Config) Init() (err error) {
 		return err
 	}
 
+	c.dstCheckRows, _ = c.EnvInt64("DST_CHECK_ROWS", -1)
+
 	return nil
 }
 
@@ -69,19 +73,15 @@ func (c *Config) EnvStr(envName string) (dst string, err error) {
 	dst = os.Getenv(envName)
 	if dst == "" {
 		err = errors.New("Missing ENV variable: " + envName)
-	} else {
-		log.Printf("%s=%s", envName, dst)
 	}
 
 	return dst, err
 }
 
-func (c *Config) EnvInt(envName string, defaultValue int) (dst int, err error) {
-	if dst, err = strconv.Atoi(os.Getenv(envName)); err != nil {
+func (c *Config) EnvInt64(envName string, defaultValue int64) (dst int64, err error) {
+	if dst, err = strconv.ParseInt(os.Getenv(envName), 10, 64); err != nil {
 		dst = defaultValue
 	}
-
-	log.Printf("%s=%d", envName, dst)
 
 	return dst, nil
 }
@@ -122,6 +122,10 @@ func run(cfg *Config) (err error) {
 		return err
 	}
 
+	if err = checkTable(dstDb, cfg); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -135,7 +139,7 @@ func clearTable(dstDb *sql.DB, cfg *Config) (err error) {
 func copyTable(srcDb *sql.DB, dstDb *sql.DB, cfg *Config) (err error) {
 	var ir Insert
 	var rows *sql.Rows
-	var rowCount int
+	var rowCount int64
 	var columns []string
 
 	if rows, err = srcDb.Query(cfg.srcSelectSql); err != nil {
@@ -150,12 +154,10 @@ func copyTable(srcDb *sql.DB, dstDb *sql.DB, cfg *Config) (err error) {
 
 	switch cfg.dstDbDriver {
 	case "postgres":
-		log.Printf("Using COPY IN\n")
 		if ir, err = bulk.NewCopyIn(dstDb, columns, cfg.dstSchema, cfg.dstTable); err != nil {
 			return err
 		}
 	default:
-		log.Printf("Using bulk insert\n")
 		if ir, err = bulk.NewBulk(dstDb, columns, cfg.dstSchema, cfg.dstTable, cfg.maxRowBufSz, cfg.maxRowTxCommit); err != nil {
 			return err
 		}
@@ -174,8 +176,8 @@ func copyTable(srcDb *sql.DB, dstDb *sql.DB, cfg *Config) (err error) {
 	return err
 }
 
-func copyBulkRows(dstDb *sql.DB, rows *sql.Rows, ir Insert, cfg *Config) (rowCount int, err error) {
-	var totalRowCount int
+func copyBulkRows(dstDb *sql.DB, rows *sql.Rows, ir Insert, cfg *Config) (rowCount int64, err error) {
+	var totalRowCount int64
 
 	i := 1
 
@@ -198,4 +200,36 @@ func copyBulkRows(dstDb *sql.DB, rows *sql.Rows, ir Insert, cfg *Config) (rowCou
 	fmt.Println()
 
 	return totalRowCount, nil
+}
+
+func checkTable(dstDb *sql.DB, cfg *Config) (err error) {
+	if cfg.dstCheckRows < 0 {
+		return nil
+	}
+
+	var total int64
+
+	rows, err := dstDb.Query("SELECT COUNT(*) AS count FROM " + cfg.dstSchema + "." + cfg.dstTable)
+	if err != nil {
+		return err
+	}
+
+	defer rows.Close()
+
+	for rows.Next() {
+		if err := rows.Scan(&total); err != nil {
+			return err
+		}
+	}
+
+	if err = rows.Err(); err != nil {
+		return err
+	}
+
+	if total < cfg.dstCheckRows {
+		return fmt.Errorf("Destination table %s.%s row count %d < %d",
+			cfg.dstSchema, cfg.dstTable, total, cfg.dstCheckRows)
+	}
+
+	return nil
 }
