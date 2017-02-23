@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"database/sql"
 	"strconv"
+
+	"github.com/juju/errors"
 )
 
 type Bulk struct {
@@ -43,7 +45,7 @@ func (r *Bulk) Append(rows *sql.Rows) (err error) {
 
 	if r.totalRowCount > 0 && r.totalRowCount%r.maxRowTxCommit == 0 {
 		if err = r.tx.Commit(); err != nil {
-			return err
+			return errors.Trace(err)
 		}
 		r.tx = nil
 	}
@@ -52,12 +54,12 @@ func (r *Bulk) Append(rows *sql.Rows) (err error) {
 	if r.bufPos >= r.bufSz {
 		if r.tx == nil {
 			if r.tx, err = r.db.Begin(); err != nil {
-				return err
+				return errors.Trace(err)
 			}
 		}
 
 		if _, err = r.stmt.Exec(r.buf...); err != nil {
-			return err
+			return errors.Trace(err)
 		}
 
 		r.bufPos = 0
@@ -86,13 +88,13 @@ func (r *Bulk) Flush() (totalRowCount int, err error) {
 
 		stmt, err := r.prepare(r.rowPos)
 		if err != nil {
-			return 0, err
+			return 0, errors.Trace(err)
 		}
 
 		defer stmt.Close()
 
 		if _, err = stmt.Exec(buf...); err != nil {
-			return 0, err
+			return 0, errors.Trace(err)
 		}
 
 		r.totalRowCount += r.rowPos
@@ -102,7 +104,7 @@ func (r *Bulk) Flush() (totalRowCount int, err error) {
 	}
 
 	if err = r.tx.Commit(); err != nil {
-		return 0, err
+		return 0, errors.Trace(err)
 	}
 
 	return r.totalRowCount, nil
@@ -171,7 +173,7 @@ func NewBulk(db *sql.DB, columns []string, schema string, tableName string, rowC
 	r.buf = make([]interface{}, r.bufSz)
 
 	if r.stmt, err = r.prepare(rowCount); err != nil {
-		return nil, err
+		return nil, errors.Trace(err)
 	}
 
 	return r, nil

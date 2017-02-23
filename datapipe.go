@@ -2,15 +2,15 @@ package main
 
 import (
 	"database/sql"
-	"errors"
 	"fmt"
-	"log"
 	"os"
 	"strconv"
 	"time"
 
 	_ "github.com/denisenkom/go-mssqldb"
 	_ "github.com/lib/pq"
+
+	"github.com/juju/errors"
 
 	"github.com/literatesnow/go-datapipe/bulk"
 )
@@ -27,6 +27,8 @@ type Config struct {
 	dstDbUri    string //Destination database driver URI
 	dstSchema   string
 	dstTable    string //Destination database table name
+
+	showStackTrace bool //Display stack traces on error
 }
 
 type Insert interface {
@@ -36,30 +38,34 @@ type Insert interface {
 }
 
 func (c *Config) Init() (err error) {
+	if os.Getenv("SHOW_STACK_TRACE") != "" {
+		c.showStackTrace = true
+	}
+
 	c.maxRowBufSz, _ = c.EnvInt("MAX_ROW_BUF_SZ", 100)
 	c.maxRowTxCommit, _ = c.EnvInt("MAX_ROW_TX_COMMIT", 500)
 
 	if c.srcDbDriver, err = c.EnvStr("SRC_DB_DRIVER"); err != nil {
-		return err
+		return errors.Trace(err)
 	}
 	if c.srcDbUri, err = c.EnvStr("SRC_DB_URI"); err != nil {
-		return err
+		return errors.Trace(err)
 	}
 	if c.srcSelectSql, err = c.EnvStr("SRC_DB_SELECT_SQL"); err != nil {
-		return err
+		return errors.Trace(err)
 	}
 
 	if c.dstDbDriver, err = c.EnvStr("DST_DB_DRIVER"); err != nil {
-		return err
+		return errors.Trace(err)
 	}
 	if c.dstDbUri, err = c.EnvStr("DST_DB_URI"); err != nil {
-		return err
+		return errors.Trace(err)
 	}
 	if c.dstSchema, err = c.EnvStr("DST_DB_SCHEMA"); err != nil {
-		return err
+		return errors.Trace(err)
 	}
 	if c.dstTable, err = c.EnvStr("DST_DB_TABLE"); err != nil {
-		return err
+		return errors.Trace(err)
 	}
 
 	return nil
@@ -68,7 +74,7 @@ func (c *Config) Init() (err error) {
 func (c *Config) EnvStr(envName string) (dst string, err error) {
 	dst = os.Getenv(envName)
 	if dst == "" {
-		err = errors.New("Missing ENV variable: " + envName)
+		err = errors.Errorf("Missing ENV variable: %s", envName)
 	}
 
 	return dst, err
@@ -85,12 +91,12 @@ func (c *Config) EnvInt(envName string, defaultValue int) (dst int, err error) {
 func main() {
 	cfg := &Config{}
 	if err := cfg.Init(); err != nil {
-		log.Fatal(err)
+		showError(cfg, err)
 		return
 	}
 
 	if err := run(cfg); err != nil {
-		log.Fatal(err)
+		showError(cfg, err)
 		return
 	}
 }
@@ -99,23 +105,23 @@ func run(cfg *Config) (err error) {
 	var srcDb, dstDb *sql.DB
 
 	if srcDb, err = sql.Open(cfg.srcDbDriver, cfg.srcDbUri); err != nil {
-		return err
+		return errors.Trace(err)
 	}
 
 	defer srcDb.Close()
 
 	if dstDb, err = sql.Open(cfg.dstDbDriver, cfg.dstDbUri); err != nil {
-		return err
+		return errors.Trace(err)
 	}
 
 	defer dstDb.Close()
 
 	if err = clearTable(dstDb, cfg); err != nil {
-		return err
+		return errors.Trace(err)
 	}
 
 	if err = copyTable(srcDb, dstDb, cfg); err != nil {
-		return err
+		return errors.Trace(err)
 	}
 
 	return nil
@@ -123,7 +129,7 @@ func run(cfg *Config) (err error) {
 
 func clearTable(dstDb *sql.DB, cfg *Config) (err error) {
 	if _, err = dstDb.Exec("TRUNCATE TABLE " + cfg.dstSchema + "." + cfg.dstTable); err != nil {
-		return err
+		return errors.Trace(err)
 	}
 	return nil
 }
@@ -135,11 +141,13 @@ func copyTable(srcDb *sql.DB, dstDb *sql.DB, cfg *Config) (err error) {
 	var columns []string
 
 	if rows, err = srcDb.Query(cfg.srcSelectSql); err != nil {
-		return err
+		return errors.Trace(err)
 	}
 
+	defer rows.Close()
+
 	if columns, err = rows.Columns(); err != nil {
-		return err
+		return errors.Trace(err)
 	}
 
 	startTime := time.Now()
@@ -147,49 +155,64 @@ func copyTable(srcDb *sql.DB, dstDb *sql.DB, cfg *Config) (err error) {
 	switch cfg.dstDbDriver {
 	case "postgres":
 		if ir, err = bulk.NewCopyIn(dstDb, columns, cfg.dstSchema, cfg.dstTable); err != nil {
-			return err
+			return errors.Trace(err)
 		}
 	default:
-		if ir, err = bulk.NewBulk(dstDb, columns, cfg.dstSchema, cfg.dstTable, cfg.maxRowBufSz, cfg.maxRowTxCommit); err != nil {
-			return err
+		if ir, err = bulk.NewBulk(dstDb, columns,
+			cfg.dstSchema, cfg.dstTable,
+			cfg.maxRowBufSz, cfg.maxRowTxCommit); err != nil {
+			return errors.Trace(err)
 		}
 	}
 
 	rowCount, err = copyBulkRows(dstDb, rows, ir, cfg)
-
-	if err = ir.Close(); err != nil {
-		return err
+	if err != nil {
+		return errors.Trace(err)
 	}
 
-	duration := time.Since(startTime)
+	if err = ir.Close(); err != nil {
+		return errors.Trace(err)
+	}
 
-	log.Printf("%d rows in %s\n", rowCount, duration.String())
+	fmt.Printf("%d rows in %s\n", rowCount, time.Since(startTime).String())
 
-	return err
+	return errors.Trace(rows.Err())
 }
 
 func copyBulkRows(dstDb *sql.DB, rows *sql.Rows, ir Insert, cfg *Config) (rowCount int, err error) {
 	var totalRowCount int
+	const dotLimit = 1000
 
 	i := 1
 
 	for rows.Next() {
 		if err = ir.Append(rows); err != nil {
-			return 0, err
+			return 0, errors.Trace(err)
 		}
 
-		if i%1000 == 0 {
+		if i%dotLimit == 0 {
 			fmt.Print(".")
+			i = 1
 		}
 
 		i++
 	}
 
 	if totalRowCount, err = ir.Flush(); err != nil {
-		return 0, err
+		return 0, errors.Trace(err)
 	}
 
-	fmt.Println()
+	if totalRowCount > dotLimit {
+		fmt.Println()
+	}
 
-	return totalRowCount, nil
+	return totalRowCount, errors.Trace(rows.Err())
+}
+
+func showError(cfg *Config, err error) {
+	if cfg.showStackTrace {
+		fmt.Println(errors.ErrorStack(err))
+	} else {
+		fmt.Println(err)
+	}
 }

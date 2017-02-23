@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"strconv"
 
+	"github.com/juju/errors"
 	"github.com/lib/pq"
 )
 
@@ -41,7 +42,7 @@ func (r *CopyIn) Append(rows *sql.Rows) (err error) {
 	}
 
 	if _, err = r.stmt.Exec(r.values...); err != nil {
-		return err
+		return errors.Trace(err)
 	}
 
 	r.totalRowCount++
@@ -52,11 +53,11 @@ func (r *CopyIn) Append(rows *sql.Rows) (err error) {
 //Closes any prepared statements
 func (r *CopyIn) Close() (err error) {
 	if err = r.stmt.Close(); err != nil {
-		return err
+		return errors.Trace(err)
 	}
 
 	if err = r.tx.Commit(); err != nil {
-		return err
+		return errors.Trace(err)
 	}
 
 	return nil
@@ -64,7 +65,7 @@ func (r *CopyIn) Close() (err error) {
 
 func (r *CopyIn) Flush() (totalRowCount int, err error) {
 	if _, err = r.stmt.Exec(); err != nil {
-		return 0, err
+		return 0, errors.Trace(err)
 	}
 
 	return r.totalRowCount, nil
@@ -75,7 +76,7 @@ func (r *CopyIn) findColumnTypes(schema string, tableName string, columns []stri
 
 	rows, err := r.db.Query(sql, schema, tableName)
 	if err != nil {
-		return err
+		return errors.Trace(err)
 	}
 
 	defer rows.Close()
@@ -84,7 +85,7 @@ func (r *CopyIn) findColumnTypes(schema string, tableName string, columns []stri
 		var colName, colType string
 
 		if err := rows.Scan(&colName, &colType); err != nil {
-			return err
+			return errors.Trace(err)
 		}
 
 		for i := 0; i < len(columns); i++ {
@@ -94,7 +95,7 @@ func (r *CopyIn) findColumnTypes(schema string, tableName string, columns []stri
 		}
 	}
 
-	return rows.Err()
+	return errors.Trace(rows.Err())
 }
 
 func NewCopyIn(db *sql.DB, columns []string, schema string, tableName string) (r *CopyIn, err error) {
@@ -112,15 +113,15 @@ func NewCopyIn(db *sql.DB, columns []string, schema string, tableName string) (r
 	}
 
 	if r.tx, err = r.db.Begin(); err != nil {
-		return nil, err
+		return nil, errors.Trace(err)
 	}
 
 	if err = r.findColumnTypes(schema, tableName, columns); err != nil {
-		return nil, err
+		return nil, errors.Trace(err)
 	}
 
 	if r.stmt, err = r.tx.Prepare(pq.CopyInSchema(schema, tableName, columns...)); err != nil {
-		return nil, err
+		return nil, errors.Trace(err)
 	}
 
 	return r, nil
