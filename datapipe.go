@@ -139,6 +139,8 @@ func copyTable(srcDb *sql.DB, dstDb *sql.DB, cfg *Config) (err error) {
 	var rowCount int
 	var columns []string
 
+	readStart := time.Now()
+
 	if rows, err = srcDb.Query(cfg.srcSelectSql); err != nil {
 		return errors.Trace(err)
 	}
@@ -149,7 +151,8 @@ func copyTable(srcDb *sql.DB, dstDb *sql.DB, cfg *Config) (err error) {
 		return errors.Trace(err)
 	}
 
-	startTime := time.Now()
+	readEnd := time.Since(readStart)
+	writeStart := time.Now()
 
 	switch cfg.dstDbDriver {
 	case "postgres":
@@ -157,7 +160,8 @@ func copyTable(srcDb *sql.DB, dstDb *sql.DB, cfg *Config) (err error) {
 			return errors.Trace(err)
 		}
 	default:
-		if ir, err = bulk.NewBulk(dstDb, columns,
+		if ir, err = bulk.NewBulk(
+			dstDb, columns,
 			cfg.dstSchema, cfg.dstTable,
 			cfg.maxRowBufSz, cfg.maxRowTxCommit); err != nil {
 			return errors.Trace(err)
@@ -173,7 +177,12 @@ func copyTable(srcDb *sql.DB, dstDb *sql.DB, cfg *Config) (err error) {
 		return errors.Trace(err)
 	}
 
-	fmt.Printf("%d rows in %s\n", rowCount, time.Since(startTime).String())
+	writeEnd := time.Since(writeStart)
+
+	fmt.Printf("%d rows queried in %s and inserted in %s\n",
+		rowCount,
+		readEnd.String(),
+		writeEnd.String())
 
 	return errors.Trace(rows.Err())
 }
