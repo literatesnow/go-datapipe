@@ -92,12 +92,11 @@ func main() {
 	cfg := &Config{}
 	if err := cfg.Init(); err != nil {
 		showError(cfg, err)
-		return
-	}
+		os.Exit(2)
 
-	if err := run(cfg); err != nil {
+	} else if err := run(cfg); err != nil {
 		showError(cfg, err)
-		return
+		os.Exit(1)
 	}
 }
 
@@ -211,8 +210,8 @@ func copyBulkRows(dstDb *sql.DB, rows *sql.Rows, ir Insert, cfg *Config) (rowCou
 
 func showError(cfg *Config, err error) {
 	if cfg.showStackTrace {
-		fmt.Println(errors.ErrorStack(err))
+		fmt.Fprintf(os.Stderr, "%s\n", errors.ErrorStack(err))
 	} else {
-		fmt.Println(err)
+		fmt.Fprintf(os.Stderr, "%s\n", err)
 	}
 }
